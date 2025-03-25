@@ -5,6 +5,16 @@ import numpy as np
 import gradient_util as gu
 import thin_slice_method as tsm
 
+# Class to model gradient calculation, trajectory estimation, and GIRF correction with a SequenceTree sequence.
+# Args:
+    # 'ramp_time_1' (float): first ramp time of STArbGradient (us)
+    # 'plateau_time' (float): plateau time of STArbGradient (i.e. the actual arbitrary gradient); (us)
+    # 'ramp_time_2' (float): second ramp time of STArbGradient (us)
+    # 'fov' (array): field-of-view of acquisition [x/y/z] (mm)
+    # 'dwell_time' (float): dwell time of readout
+    # 'kspace_offset' (array): offset in k-space applied to all points in the trajectory; [x,y,z]
+    # 'gamma' (float): gyromagnetic ratio (MHz/T)
+    # 'girf' (dict): gradient impulse response function for trajectory correction, sampled on 1 us increment
 class STArbGradient(object):
     def __init__(
             self,
@@ -20,7 +30,7 @@ class STArbGradient(object):
         self.ramp_time_1 = ramp_time_1
         self.plateau_time = plateau_time
         self.ramp_time_2 = ramp_time_2
-        self.fov = fov
+        self.fov = np.array(fov)
         self.dwell_time = dwell_time
         self.kspace_offset = kspace_offset
         self.gamma = gamma
@@ -32,7 +42,8 @@ class STArbGradient(object):
         self._accumulatedMoment()
         self._trajectory()
 
-    # Computes gradient amplitudes and corresponding total moments.
+    # Computes programmed gradient amplitudes and corresponding total moments.
+    # Calculates corrected gradients if GIRF exists.
     def _prepare(self):
         # number of time points for discretizing the gradient waveform, including ramps
         N = int(self.duration()/10) + 1
@@ -58,21 +69,28 @@ class STArbGradient(object):
         # set gradient amplitudes during readout gradient waveform
         idx_gradWav = np.squeeze(np.argwhere(np.logical_and(t >= 0, t < 1)))
         amp[:, idx_gradWav] = (self._momentAt(t[idx_gradWav]+10/self.plateau_time)-self._momentAt(t[idx_gradWav])) / 10
-        #amp = np.where(np.logical_and(t >= 0, t < 1), (self._momentAt(t+10/self.plateau_time)-self._momentAt(t)) / 10, amp)
 
         # set gradient amplitudes for 2nd ramp
         holdt = 1 - (idx*10-self.ramp_time_1-self.plateau_time)/self.ramp_time_2
         holdt = np.stack(3 * [holdt], axis=0)
         amp = np.where(t >= 1, holdt*final_amplitude, amp)
+        # amp is programmed on 10 us increment
         self.amp = amp
 
-        # perform GIRF correction if one is provided
+        # interpolate amp onto 1 us increment
+        times_10us = t*self.plateau_time
+        times_1us = np.arange(times_10us[0], times_10us[len(times_10us)-1]+1)
+        amp_1us = np.zeros((3, len(times_1us)))
+        for i_axis in range(3):
+            amp_1us[i_axis] = np.interp(times_1us, times_10us, self.amp[i_axis])
+        self.amp_1us = amp_1us
+
+        # perform GIRF correction on the 1 us amp if one is provided
         if self.girf is not None:
-            self.amp_programmed = np.copy(self.amp)
-            self.amp = self._correctAmp(self.girf, self.amp_programmed)
+            self.amp_1us = self._correctAmp(self.girf, self.amp_1us)
 
         # compute total moments along the gradient waveform (not accounting for the preceding encoding gradient)
-        total_moment = self.amp * 10
+        total_moment = self.amp_1us * 1
         total_moment = np.cumsum(total_moment, axis=1)
         self.total_moment = total_moment
 
@@ -89,7 +107,7 @@ class STArbGradient(object):
         self.peakslew = np.max(np.abs(slew))
 
     # Computes the accumulated moment of the arbitrary gradient along with the encoding gradient.
-    # Assumes encoding gradient nulls ramp 1 moment and sets initial moment for first readout gradient point.
+    # Assumes encoding gradient nulls ramp 1 moment and sets up initial moment for first readout gradient point.
     def _accumulatedMoment(self):
         # encode segment nulls ramp 1 moment and sets moment for first readout gradient point
         tmp_encode_moment = -self._ramp1Moment() + self._momentAt(0)
@@ -99,19 +117,15 @@ class STArbGradient(object):
     # Computes the k-space trajectory of the arbitrary gradient from the accumulated moment.
     # Resamples the accumulated moment according to the dwell time.
     def _trajectory(self):
-        N = int(self.duration() / 10) + 1
-        times = np.linspace(0, self.duration(), N)
-
-        # determine indices of readout ("plateau")
-        tmp_cond = np.logical_and(times >= self.ramp_time_1, times <= self.ramp_time_1+self.plateau_time)
+        # get times of arbitrary gradient, including ramps
+        times = np.arange(0, self.duration()+1) - self.ramp_time_1
+        # determine indices of readout "plateau"
+        tmp_cond = np.logical_and(times >= 0, times < self.plateau_time)
         idx_roGrad = np.squeeze(np.argwhere(tmp_cond))
-        times = times[idx_roGrad]
-        tmp_roGrad_accu_mom = self.accumulated_moment[:, idx_roGrad]
-
-        # linear interpolation of the accumulated moments along the readout gradient
-        times_interp = np.arange(times[0], times[len(times)-1], self.dwell_time)
-        tmp_roGrad_accu_mom_interp = np.array([np.interp(times_interp, times, tmp_roGrad_accu_mom[i_axis]) for i_axis in range(3)])
-        self.trajectory = gu.moment2kspace(tmp_roGrad_accu_mom_interp, self.fov, gamma=self.gamma)
+        tmp_roGrad_accum_mom = self.accumulated_moment[:, idx_roGrad]
+        # sample readout, incrementing by the dwell time
+        tmp_roGrad_accum_mom = tmp_roGrad_accum_mom[:, ::self.dwell_time]
+        self.trajectory = gu.moment2kspace(tmp_roGrad_accum_mom, self.fov, gamma=self.gamma)
 
     # Outputs total duration of STArbGradient, including both ramp times and the plateau (readout gradient) time.
     # Returns:
@@ -123,7 +137,7 @@ class STArbGradient(object):
     # Args:
         # 't' (float or array): parameterization of the readout gradient; 0 <= t <= 1; [m1, ..., mD]
     # Returns:
-        # 'moments' (float or array): gradient moments at time t; [n_dims=3, m1, ..., mD]
+        # 'moments' (float or array): gradient moments at time t; [x/y/z, m1, ..., mD]
     def _momentAt(self, t):
         tmp_kspace_offset = self.kspace_offset
         if not (isinstance(t, float) or isinstance(t, int)):
@@ -134,7 +148,7 @@ class STArbGradient(object):
     # Args:
         # 't' (float or array): parameterization of the readout gradient; 0 <= t <= 1; [m1, ..., mD]
     # Returns:
-        # 'kspace' (float or array): k-space position at time t; [n_dims=3, m1, ..., mD]
+        # 'kspace' (float or array): k-space position at time t; [x/y/z, m1, ..., mD]
     def _gradientShape(self, t):
         return
 
@@ -153,25 +167,9 @@ class STArbGradient(object):
             newamp[i_axis] = tsm.predicted_waveforms(self.amp[i_axis], girf)[axis]
         return newamp
 
-    # # Computes a true gradient, taking a GIRF (gradient impulse response function) as argument.
-    # # Also uses the true gradient to compute a corrected trajectory.
-    # def correctGradientAndTrajectory(self, girf):
-    #     self.girf = girf
-    #     tmp_trueamp = np.copy(self.amp)
-    #     # true gradient amplitude along each axis is calculated by applying the corresponding axis GIRF
-    #     #TODO: implement a rotation of the FOV before GIRF correction
-    #     axes = ['x', 'y', 'z']
-    #     for i_axis, axis in enumerate(axes):
-    #         tmp_trueamp[i_axis] = tsm.predicted_waveforms(self.amp[i_axis], girf)[axis]
-    #     self.trueamp = tmp_trueamp
-    #
-    #     # compute total moments along the gradient waveform (not accounting for the preceding encoding gradient)
-    #     total_moment = tmp_trueamp * 10
-    #     total_moment = np.cumsum(total_moment, axis=1)
-    #     self.total_moment = total_moment
 
-
-
+# Example implementation of class that inherits from STArbGradient.
+# Identical implementation of STCircleGradient in SequenceTree.
 class STCircleGradient(STArbGradient):
     def __init__(
             self,
@@ -200,7 +198,7 @@ class STCircleGradient(STArbGradient):
     # Args:
         # 't' (float or array): parameterization of the readout gradient; 0 <= t <= 1; [m1, ..., mD]
     # Returns:
-        # 'kspace' (float or array): k-space position at time t; [n_dims=3, m1, ..., mD]
+        # 'kspace' (float or array): k-space position at time t; [x/y/z, m1, ..., mD]
     def _gradientShape(self, t):
         t2 = t * 2 * 3.141592*self.num_cycles
         tmp_kspace_direction_1 = self.kspace_direction_1

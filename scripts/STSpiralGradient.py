@@ -6,6 +6,24 @@
 import numpy as np
 from STArbGradient import STArbGradient
 
+
+# SequenceTree-aware implementation of an Archimedean spiral.
+# Each STSpiralGradient object models a single shot (readout).
+# Args:
+    # 'shot_angle' (float): angle of spiral shot (rad)
+    # 'n_shots' (int): number of spiral shots
+    # 'matrix_size' (int): number of points in image matrix along x- and y-directions
+    # 'maxamp' (float): maximum gradient amplitude (uT/mm)
+    # 'ramprate' (float): maximum gradient slew rate (uT/mm/us)
+    # 'ramp_time_1' (float): first ramp time of STArbGradient (us)
+    # 'ramp_time_2' (float): second ramp time of STArbGradient (us)
+    # 'fov_xy' (float): field-of-view in x- and y-directions (mm)
+    # 'slice_thickness' (float): slice thickness (mm)
+    # 'dwell_time' (float): dwell time of readout
+    # 'kspace_offset' (array): offset in k-space applied to all points in the trajectory; [x,y,z]
+    # 'gamma' (float): gyromagnetic ratio (MHz/T)
+    # 'girf' (dict): gradient impulse response function for trajectory correction, sampled on 1 us increment
+#TODO: use kwargs to clean up this class's argument list
 class STSpiralGradient(STArbGradient):
     def __init__(
             self,
@@ -107,16 +125,12 @@ class STSpiralGradient(STArbGradient):
 
     def _theta1(self, t):
         time = t * self.plateau_time / 1E6
-        # fractional power casts output to complex dtype
         output = (0.5 * self.beta * time**2) / (1 + self.beta/(2*self.a2) * time**(4.0/3))
         return output
-        #return np.real(output)
 
     def _theta2(self, t):
         time = t * self.plateau_time / 1E6
         gamma = self.gamma*1E2
         maxamp = self.maxamp/10
-        # fractional power casts output to complex dtype
         output = (self.theta_s**2 + 2*gamma/self.lamda*maxamp*(time - self.Ts))**(0.5)
         return output
-        #return np.real(output)

@@ -3,7 +3,13 @@ import os
 import sys
 import pickle
 
-
+# Reads in a .mda file.
+# Args:
+    # 'fname' (string): file name of .mda
+    # 'folder' (string): path to direction containing .mda
+    # 'dtype' (dtype): NumPy data type of .mda
+# Returns:
+    # (array) .mda file that was read
 def readmda(fname,folder=os.getcwd(),dtype=np.double):
     file_name = os.path.join(folder,fname)
     # print('\n\n\n\n READING MDA FILE \n\n'+ file_name+'\n\n')
@@ -83,7 +89,10 @@ def readmda(fname,folder=os.getcwd(),dtype=np.double):
     
     return raw_data
 
-
+# Writes a NumPy array to an .mda file.
+# Args:
+    # 'fname' (string): file name (or file path) of .mda
+    # 'mat' (array): NumPy array to be written
 def writemda(fname,mat):
     # print('\n\n\n\n WRITING MDA NOW .... \n\n\n')
 
@@ -139,13 +148,20 @@ def writemda(fname,mat):
 
     return
 
-
+# Reads a Python variable from a .pkl file.
+# Args:
+    # 'fname' (string): file name (or file path) of .pkl file
+# Returns:
+    # (variable) Python variable saved as .pkl file
 def read_var(fname):
     with open(fname, 'rb') as file:
         var = pickle.load(file)
     return var
 
-
+# Writes a Python variable from to a .pkl file.
+# Args:
+    # 'fname' (string): file name (or file path) of .pkl file
+    # 'var' (variable): Python variable to be written
 def write_var(fname, var):
     with open(fname, 'wb') as file:
         pickle.dump(var, file)

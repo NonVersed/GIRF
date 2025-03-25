@@ -190,38 +190,27 @@ def measured_waveforms(com_meas, grad_meas, seq_params, threshold=0.05):
         # 'slice_spacing' (float): spacing between slices (mm)
         # 'gamma' (float): gyromagnetic ratio (MHz/T)
     # 'threshold' (float): value between 0 and 1 for thresholding signal and noise from slice-selection
-    # 'kernel_size' (int): size of GIRF kernel
+    # 'kernel_size' (int): duration of GIRF kernel; increment of 1 us
     # 'lamda' (float): regularization parameter for calculating GIRF
 # Returns:
     # (dict) gradient impulse response functions (i.e. convolution kernels) for each axis (x/y/z)
     # (dict) gradient waveform measurements for each axis (x/y/z)
-def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_size=32, lamda=0):
+def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_size=320, lamda=0):
     # compute the measured B0 and gradient waveforms
-    waveforms_meas = measured_waveforms(com_meas, grad_meas, seq_params, threshold=threshold)
+    wav_meas = measured_waveforms(com_meas, grad_meas, seq_params, threshold=threshold)
 
-    # readouts sample left-sided, remove end point from nominal waveform
-    wav_nom = waveform_nom[:len(waveform_nom)-1]
-
-    # get time points for programmed and measured waveforms
+    # interpolate the nominal waveform (programmed in 10 us) to 1 us increment
+    times_10us = np.arange(0, len(waveform_nom)) * 10
+    times_1us = np.arange(0, len(grad_meas))*seq_params['dwell_time']
+    wav_nom = np.interp(times_1us, times_10us, waveform_nom)
     n_pts = len(wav_nom)
-    times = np.arange(0,n_pts)*10
-    n_pts_meas = grad_meas.shape[0]
-    times_meas = np.arange(0, n_pts_meas)*seq_params['dwell_time']
-
-    # sample the measured waveforms in increments of 10 us using interpolation
-    wav_meas = {}
-    for axis in ['x', 'y', 'z']:
-        tmp_meas = waveforms_meas[axis][1]
-        wav_meas[axis] = np.interp(times, times_meas, tmp_meas)
-    del tmp_meas, waveforms_meas
-
 
     # estimate the GIRF for each axis, store in dictionary
     girf = {}
     for axis in ['x', 'y', 'z']:
         tmp_W_nom = sp.linop.ConvolveFilter([kernel_size], wav_nom)
         tmp_R = sp.linop.Resize([n_pts], tmp_W_nom.oshape)
-        tmp_app = sp.app.LinearLeastSquares(tmp_R * tmp_W_nom, wav_meas[axis], lamda=lamda)
+        tmp_app = sp.app.LinearLeastSquares(tmp_R * tmp_W_nom, wav_meas[axis][1], lamda=lamda)
         tmp_ker = tmp_app.run()
         girf[axis] = tmp_ker
         del tmp_W_nom, tmp_R, tmp_app, tmp_ker
@@ -231,17 +220,21 @@ def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_s
 
 # Predicts the true gradient waveforms along each axis using the gradient impulse response function.
 # Args:
-    # 'waveform_nom' (array): nominal gradient waveform programmed onto the scanner; [n_ro]
+    # 'waveform_nom' (array): nominal gradient waveform; [duration/10 + 1]; programmed in increments of 10 us
     # 'girf' (dict): gradient impulse response functions (i.e. convolution kernels) for each axis (x/y/z)
 # Returns:
-    # (dict) predicted waveforms for each axis (x/y/z)
+    # (dict) predicted waveforms for each axis (x/y/z); increments of 1 us
 def predicted_waveforms(waveform_nom, girf):
-    wav_nom = np.copy(waveform_nom)
+    # interpolate the nominal waveform (programmed in 10 us) to 1 us increment
+    times_10us = np.arange(0, len(waveform_nom)) * 10
+    times_1us = np.arange(0, 10*(len(waveform_nom)-1)+1)
+    waveform_nom_1us = np.interp(times_1us, times_10us, waveform_nom)
+
     # check if nominal waveform is odd in length
-    isOdd = wav_nom.shape[0]%2 == 1
+    isOdd = waveform_nom_1us.shape[0]%2 == 1
     # pad with 0 at end to make length even
     if isOdd:
-        wav_nom = np.pad(wav_nom, (0, 1), mode='constant')
+        wav_nom = np.pad(waveform_nom_1us, (0, 1), mode='constant')
 
     n_ro = wav_nom.shape[0]
 
