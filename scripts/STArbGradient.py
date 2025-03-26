@@ -7,9 +7,10 @@ import thin_slice_method as tsm
 
 # Class to model gradient calculation, trajectory estimation, and GIRF correction with a SequenceTree sequence.
 # Args:
-    # 'ramp_time_1' (float): first ramp time of STArbGradient (us)
-    # 'plateau_time' (float): plateau time of STArbGradient (i.e. the actual arbitrary gradient); (us)
-    # 'ramp_time_2' (float): second ramp time of STArbGradient (us)
+    # 'ramp_time_1' (int): first ramp time of STArbGradient (us); multiple of 10 us
+    # 'plateau_time' (int): plateau time of STArbGradient (us); multiple of 10 us
+    # 'ramp_time_2' (int): second ramp time of STArbGradient (us); multiple of 10 us
+    # 'readout_duration' (int): duration of readout ADC for the gradient "plateau" (left-sided); multiple of 10 us
     # 'fov' (array): field-of-view of acquisition [x/y/z] (mm)
     # 'dwell_time' (float): dwell time of readout
     # 'kspace_offset' (array): offset in k-space applied to all points in the trajectory; [x,y,z]
@@ -21,6 +22,7 @@ class STArbGradient(object):
             ramp_time_1,
             plateau_time,
             ramp_time_2,
+            readout_duration,
             fov,
             dwell_time,
             kspace_offset=np.array([0,0,0]),
@@ -29,6 +31,7 @@ class STArbGradient(object):
     ):
         self.ramp_time_1 = ramp_time_1
         self.plateau_time = plateau_time
+        self.readout_duration = readout_duration
         self.ramp_time_2 = ramp_time_2
         self.fov = np.array(fov)
         self.dwell_time = dwell_time
@@ -79,7 +82,8 @@ class STArbGradient(object):
 
         # interpolate amp onto 1 us increment
         times_10us = t*self.plateau_time
-        times_1us = np.arange(times_10us[0], times_10us[len(times_10us)-1]+1)
+        times_1us = np.linspace(times_10us[0], times_10us[len(times_10us)-1], 10*(len(times_10us)-1)+1)
+        #times_1us = np.arange(times_10us[0], times_10us[len(times_10us)-1]+1)
         amp_1us = np.zeros((3, len(times_1us)))
         for i_axis in range(3):
             amp_1us[i_axis] = np.interp(times_1us, times_10us, self.amp[i_axis])
@@ -119,8 +123,11 @@ class STArbGradient(object):
     def _trajectory(self):
         # get times of arbitrary gradient, including ramps
         times = np.arange(0, self.duration()+1) - self.ramp_time_1
-        # determine indices of readout "plateau"
-        tmp_cond = np.logical_and(times >= 0, times < self.plateau_time)
+
+        # determine indices of readout ADC
+        #tmp_cond = np.logical_and(times >= 0, times < self.plateau_time)
+        tmp_cond = np.logical_and(times >= 0, times < self.readout_duration)
+
         idx_roGrad = np.squeeze(np.argwhere(tmp_cond))
         tmp_roGrad_accum_mom = self.accumulated_moment[:, idx_roGrad]
         # sample readout, incrementing by the dwell time
@@ -167,6 +174,10 @@ class STArbGradient(object):
             newamp[i_axis] = tsm.predicted_waveforms(self.amp[i_axis], girf)[axis]
         return newamp
 
+    # Rounds up a time duration to the nearest 10 us.
+    # Used for when the readout ADC is not a multiple of 10 us, but the plateau time (arb. gradient) needs to be.
+    def _rounduptime(self, t):
+        return int(t/10 + 0.999999) * 10
 
 # Example implementation of class that inherits from STArbGradient.
 # Identical implementation of STCircleGradient in SequenceTree.

@@ -192,10 +192,11 @@ def measured_waveforms(com_meas, grad_meas, seq_params, threshold=0.05):
     # 'threshold' (float): value between 0 and 1 for thresholding signal and noise from slice-selection
     # 'kernel_size' (int): duration of GIRF kernel; increment of 1 us
     # 'lamda' (float): regularization parameter for calculating GIRF
+    # 'max_iter' (int): number of CG iterations for estimating GIRF
 # Returns:
     # (dict) gradient impulse response functions (i.e. convolution kernels) for each axis (x/y/z)
     # (dict) gradient waveform measurements for each axis (x/y/z)
-def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_size=320, lamda=0):
+def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_size=320, lamda=0, max_iter=100):
     # compute the measured B0 and gradient waveforms
     wav_meas = measured_waveforms(com_meas, grad_meas, seq_params, threshold=threshold)
 
@@ -210,7 +211,7 @@ def girf(waveform_nom, com_meas, grad_meas, seq_params, threshold=0.05, kernel_s
     for axis in ['x', 'y', 'z']:
         tmp_W_nom = sp.linop.ConvolveFilter([kernel_size], wav_nom)
         tmp_R = sp.linop.Resize([n_pts], tmp_W_nom.oshape)
-        tmp_app = sp.app.LinearLeastSquares(tmp_R * tmp_W_nom, wav_meas[axis][1], lamda=lamda)
+        tmp_app = sp.app.LinearLeastSquares(tmp_R * tmp_W_nom, wav_meas[axis][1], lamda=lamda, max_iter=max_iter)
         tmp_ker = tmp_app.run()
         girf[axis] = tmp_ker
         del tmp_W_nom, tmp_R, tmp_app, tmp_ker

@@ -24,7 +24,7 @@ from STArbGradient import STArbGradient
     # 'gamma' (float): gyromagnetic ratio (MHz/T)
     # 'girf' (dict): gradient impulse response function for trajectory correction, sampled on 1 us increment
 #TODO: use kwargs to clean up this class's argument list
-class STSpiralGradient(STArbGradient):
+class STReverseSpiralGradient(STArbGradient):
     def __init__(
             self,
             shot_angle,
@@ -97,6 +97,12 @@ class STSpiralGradient(STArbGradient):
         self.plateau_time = self._rounduptime(readout_duration)
 
     def _gradientShape(self, t):
+        # reverse spiral
+        t = 1-t
+        # if not (isinstance(t, float) or isinstance(t, int)):
+        #     t = np.where(t >= 0, t, 0)
+        #     t = np.where(t <= 1, t, 1)
+
         time = t * self.plateau_time / 1E6
 
         # if argument is a float or int
